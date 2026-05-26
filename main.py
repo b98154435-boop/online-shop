@@ -15,14 +15,13 @@ from aiogram.types import (
 )
 
 # ──────────────────────────────────────────
-# ⚙️ KONFIGURATSIYA (O'zingizning havolalarni qo'ying)
+# ⚙️ KONFIGURATSIYA (UZUM MARKET PRO)
 # ──────────────────────────────────────────
-BOT_TOKEN = "874760242:AAFj9oSG5txNx1Pw7UfCAc9WH_Em8tB73p0"
-ADMINS = [8488028783, 4584786468]  # Ikkala ID ham admin bo'ladi
+BOT_TOKEN = "8747604242:AAEyzcOcHOM5fPwBVRK4pl46T2EIGfaG5n4"
+ADMINS = [8488028783]  # Asosiy admin
 
-# Railway'dan olingan PostgreSQL va Redis havolalari (Shu yerlarni almashtirasiz)
-DB_URL = "postgresql://postgres:password@localhost:5432/shop_db"
-REDIS_URL = "redis://localhost:6379/0"
+DB_URL = "postgresql://neondb_owner:npg_93widXgyhepO@ep-dawn-resonance-aq5a93o7-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
+REDIS_URL = "rediss://default:gQAAAAAAAcNWAAIgcDFlNzVhMWM5NDU1ODE0NmI4YjY3Y2M1NDI4ZGViZjEyMQ@busy-emu-115542.upstash.io:6379"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -40,22 +39,22 @@ STATUSES = {
 class Reg(StatesGroup): name = State(); phone = State()
 class Shop(StatesGroup): search = State()
 class Checkout(StatesGroup): loc = State(); landmark = State(); payment = State(); receipt = State()
-class ProfileSt(StatesGroup): new_name = State()  # Xato chiziqcha to'g'rilandi
+class ProfileSt(StatesGroup): new_name = State()
 class ReviewSt(StatesGroup): rating = State(); comment = State()
 class AdminSt(StatesGroup):
     cat_name = State(); cat_edit_name = State()
     prod_cat = State(); prod_name = State(); prod_desc = State()
     prod_price = State(); prod_stock = State(); prod_photo = State()
+    prod_edit_val = State()  # Mahsulotlarni tahrirlash uchun
     admin_add = State(); pay_name = State(); pay_details = State()
-    set_fee = State(); custom_msg = State()  # Mijozga yozish state'i
+    set_fee = State(); custom_msg = State()
     ban_user = State(); bcast_msg = State(); set_loc = State()
 
 # ──────────────────────────────────────────
-# 🗄 POSTGRESQL BAZA VA YORDAMCHILAR (ASYNCPG)
+# 🗄 POSTGRESQL BAZA (YURAK)
 # ──────────────────────────────────────────
 pool = None
 
-# Barcha SQLite '?' belgilarini PostgreSQL '$1, $2' ga o'tkazib beruvchi aqlli filtr
 def prep_sql(sql: str) -> str:
     parts = sql.split('?')
     return "".join([parts[i] + (f"${i+1}" if i < len(parts)-1 else "") for i in range(len(parts))])
@@ -99,7 +98,7 @@ async def exe(sql, params=()):
 
 async def q1(sql, params=()):
     async with pool.acquire() as db:
-        r = await db.fetchrow(prep_sql(sql), *params)  # fetchbone xatosi yo'q qilindi
+        r = await db.fetchrow(prep_sql(sql), *params)
         return dict(r) if r else None
 
 async def qall(sql, params=()):
@@ -128,7 +127,7 @@ async def check_admin(user_id: int):
     return bool(adm)
 
 # ──────────────────────────────────────────
-# 🤖 BOT VA KLAVIATURALAR (Redis Bilan)
+# 🤖 BOT VA KLAVIATURALAR
 # ──────────────────────────────────────────
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 router = Router()
@@ -147,7 +146,13 @@ async def main_kb(tg_id: int):
     return rk(*rows)
 
 def admin_kb():
-    return rk(["📂 Bo'limlar", "📦 Mahsulotlar"], ["💳 To'lov usullari", "👥 Xodimlar"], ["🚫 Ban/Unban", "📊 Statistika"], ["⚙️ Sozlamalar", "📨 Broadcast"], ["🔙 Asosiy menyu"])
+    return rk(
+        ["📂 Bo'limlar", "📦 Mahsulotlar"], 
+        ["💳 To'lov usullari", "👥 Xodimlar"], 
+        ["👥 Mijozlar", "🚫 Ban/Unban"], 
+        ["📊 Statistika", "⚙️ Sozlamalar"], 
+        ["📨 Broadcast", "🔙 Asosiy menyu"]
+    )
 
 def courier_kb():
     return rk(["📋 Kuryer: Mening buyurtmalarim", "🔙 Asosiy menyu"])
@@ -231,9 +236,11 @@ async def edit_name(call: CallbackQuery, state: FSMContext):
 
 @router.message(ProfileSt.new_name)
 async def save_name(msg: Message, state: FSMContext):
-    await exe("UPDATE users SET name=? WHERE tg_id=?", (msg.text.strip(), msg.from_user.id))
+    yangi_ism = msg.text.strip()
+    await exe("UPDATE users SET name=? WHERE tg_id=?", (yangi_ism, msg.from_user.id))
+    await exe("UPDATE admins SET name=? WHERE tg_id=?", (yangi_ism, msg.from_user.id))
     await state.clear()
-    await msg.answer("✅ Saqlandi!", reply_markup=await main_kb(msg.from_user.id))
+    await msg.answer("✅ Ismingiz tizimga saqlandi! Endi menyudan bemalol foydalanishingiz mumkin.", reply_markup=await main_kb(msg.from_user.id))
 
 @router.message(F.text == "🆘 Yordam")
 async def cmd_help(msg: Message):
@@ -350,7 +357,8 @@ async def cart_clear(call: CallbackQuery):
     await exe("DELETE FROM cart WHERE user_id=?", (call.from_user.id,))
     await call.message.edit_text("🛒 Savat tozalandi.")
     await call.answer()
-    # ──────────────────────────────────────────
+
+# ──────────────────────────────────────────
 # 🚀 3. ZAKAZ BERISH (CHECKOUT)
 # ──────────────────────────────────────────
 @router.callback_query(F.data == "checkout")
@@ -461,14 +469,14 @@ async def finalize_order(msg, state, uid, pay_name, tot, lat, lon, landmark, ite
             btns = ik(
                 [("💰 Yo'lkira kiritish", f"asetfee_{oid}")], 
                 [("❌ Rad etish", f"acancel_{oid}")],
-                [("💬 Mijozga xabar yozish", f"admmsg_{uid}")]  # YANGILIK: Mijozga shaxsiy xabar yozish
+                [("💬 Mijozga xabar yozish", f"admmsg_{uid}")] 
             )
             if receipt_id: await bot.send_photo(a["tg_id"], receipt_id, caption=adm_txt, reply_markup=btns)
             else: await bot.send_message(a["tg_id"], adm_txt, reply_markup=btns)
         except: pass
 
 # ──────────────────────────────────────────
-# 💬 4. ADMIN SHAXSIY XABAR FUNKSIYASI (Direct Message)
+# 💬 4. ADMIN SHAXSIY XABAR FUNKSIYASI
 # ──────────────────────────────────────────
 @router.callback_query(F.data.startswith("admmsg_"))
 async def adm_direct_msg_start(call: CallbackQuery, state: FSMContext):
@@ -518,10 +526,16 @@ async def ucancel(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("ureview_"))
 async def ureview(call: CallbackQuery, state: FSMContext):
-    await state.update_data(rev_oid=int(call.data[8:]))
+    oid = int(call.data[8:])
+    await state.update_data(rev_oid=oid)
     await call.message.edit_text("⭐ Sifatga baho bering (1-5):", reply_markup=ik(
         [("⭐ 1", "rvstar_1"), ("⭐ 2", "rvstar_2"), ("⭐ 3", "rvstar_3"), ("⭐ 4", "rvstar_4"), ("⭐ 5", "rvstar_5")]))
     await call.answer()
+    
+    adms = await qall("SELECT tg_id FROM admins WHERE role='admin' AND is_active=1")
+    for a in adms:
+        try: await bot.send_message(a['tg_id'], f"✅ <b>Mijoz tasdiqladi!</b>\nBuyurtma #{oid} muvaffaqiyatli qabul qilindi.")
+        except: pass
 
 @router.callback_query(F.data.startswith("rvstar_"))
 async def urev_star(call: CallbackQuery, state: FSMContext):
@@ -536,6 +550,11 @@ async def urev_comment(msg: Message, state: FSMContext):
     await exe("INSERT INTO reviews(user_id, order_id, product_id, rating, comment) VALUES(?,?,0,?,?)", (msg.from_user.id, oid, rating, comment))
     await state.clear()
     await msg.answer("Rahmat, sharhingiz qabul qilindi! 🙏", reply_markup=await main_kb(msg.from_user.id))
+    
+    adms = await qall("SELECT tg_id FROM admins WHERE role='admin' AND is_active=1")
+    for a in adms:
+        try: await bot.send_message(a['tg_id'], f"⭐️ <b>Yangi sharh! (Buyurtma #{oid})</b>\n\nBahosi: {rating} yulduz ⭐️\n💬 Fikr: <i>{comment}</i>")
+        except: pass
 
 @router.callback_query(F.data == "rv_skip")
 async def urev_skip(call: CallbackQuery, state: FSMContext):
@@ -544,9 +563,14 @@ async def urev_skip(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text("Rahmat! 🙏")
     await call.answer()
+    
+    adms = await qall("SELECT tg_id FROM admins WHERE role='admin' AND is_active=1")
+    for a in adms:
+        try: await bot.send_message(a['tg_id'], f"⭐️ <b>Yangi sharh! (Buyurtma #{oid})</b>\n\nBahosi: {rating} yulduz ⭐️\n💬 Fikr: (Yozib qoldirmadi)")
+        except: pass
 
 # ──────────────────────────────────────────
-# 🛠 6. KURYER VA ADMIN CRUD (Asl nusxasi)
+# 🛠 6. KURYER VA ADMIN CRUD
 # ──────────────────────────────────────────
 @router.message(F.text == "🚚 Kuryer Panel")
 async def cmd_courier(msg: Message):
@@ -718,9 +742,24 @@ async def set_shop_loc_save(msg: Message, state: FSMContext):
 async def admin_staff(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
     stf = await qall("SELECT * FROM admins")
-    txt = "👥 <b>Xodimlar:</b>\n\n"
-    for s in stf: txt += f"{'👑 Admin' if s['role'] == 'admin' else '🚚 Kuryer'} | <code>{s['tg_id']}</code> | {s['name']}\n"
-    await msg.answer(txt, reply_markup=ik([("➕ Kuryer qo'shish", "add_cour")], [("➕ Admin qo'shish", "add_adm")]))
+    btns = []
+    for s in stf:
+        role = '👑 Admin' if s['role'] == 'admin' else '🚚 Kuryer'
+        if s['tg_id'] != 8488028783:  
+            btns.append([(f"❌ {s['name']} ({role})", f"delstf_{s['id']}")])
+        else:
+            btns.append([(f"🔒 {s['name']} (Siz - Asosiy)", "noop")])
+            
+    btns.append([("➕ Kuryer qo'shish", "add_cour")])
+    btns.append([("➕ Admin qo'shish", "add_adm")])
+    await msg.answer("👥 <b>Xodimlar (O'chirish uchun ustiga bosing):</b>", reply_markup=ik(*btns))
+
+@router.callback_query(F.data.startswith("delstf_"))
+async def delete_staff(call: CallbackQuery):
+    stf_id = int(call.data[7:])
+    await exe("DELETE FROM admins WHERE id=?", (stf_id,))
+    await call.message.edit_text("✅ Xodim bazadan muvaffaqiyatli o'chirildi!")
+    await call.answer("O'chirildi")
 
 @router.callback_query(F.data.in_(["add_cour", "add_adm"]))
 async def add_staff(call: CallbackQuery, state: FSMContext):
@@ -733,16 +772,42 @@ async def add_staff(call: CallbackQuery, state: FSMContext):
 @router.message(AdminSt.admin_add)
 async def save_staff(msg: Message, state: FSMContext):
     if not msg.text.isdigit(): return await msg.answer("Faqat raqam!")
+    tg_id = int(msg.text)
     d = await state.get_data(); role = d['staff_role']
-    name = "Kuryer" if role == "courier" else "Admin"
-    await exe("INSERT INTO admins(tg_id,name,role) VALUES(?,?,?) ON CONFLICT (tg_id) DO NOTHING", (int(msg.text), name, role))
+    role_uz = "Kuryer" if role == "courier" else "Admin"
+    
+    await exe("INSERT INTO admins(tg_id,name,role) VALUES(?,?,?) ON CONFLICT (tg_id) DO NOTHING", (tg_id, f"{role_uz} (Ism kutilmoqda...)", role))
     await state.clear()
-    await msg.answer("✅ Xodim qo'shildi!", reply_markup=admin_kb())
+    await msg.answer(f"✅ {role_uz} qo'shildi! Unga ismini kiritishi uchun xabar yubordim.", reply_markup=admin_kb())
+    
+    try:
+        await bot.send_message(tg_id, f"🎉 <b>Tabriklaymiz!</b> Siz do'konga <b>{role_uz}</b> etib tayinlandingiz!\n\n👇 Iltimos, ma'muriyat sizni tanib olishi uchun pastdagi tugmani bosib o'z ismingizni kiriting:", reply_markup=ik([("✍️ Ismni kiritish", "force_name_set")]))
+    except Exception:
+        pass
+
+@router.callback_query(F.data == "force_name_set")
+async def ask_staff_name(call: CallbackQuery, state: FSMContext):
+    await call.message.answer("✏️ Iltimos, ism-familiyangizni yozing:")
+    await state.set_state(ProfileSt.new_name)
+    await call.answer()
+
+@router.message(F.text == "👥 Mijozlar")
+async def admin_users_list(msg: Message):
+    if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
+    users = await qall("SELECT name, tg_id, phone, is_blocked FROM users ORDER BY id DESC LIMIT 50")
+    if not users: return await msg.answer("Mijozlar hozircha yo'q.")
+    
+    txt = "👥 <b>Oxirgi 50 ta mijoz ro'yxati:</b>\n<i>(ID raqamini nusxalash uchun ustiga bosing)</i>\n\n"
+    for u in users:
+        status = "🚫 BAN" if u['is_blocked'] else "✅ Faol"
+        txt += f"👤 {u['name']} | 📱 {u['phone']}\n🆔 <code>{u['tg_id']}</code> | {status}\n\n"
+    
+    await msg.answer(txt)
 
 @router.message(F.text == "🚫 Ban/Unban")
 async def admin_ban_menu(msg: Message, state: FSMContext):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
-    await msg.answer("🚫 Bloklash yoki ochish uchun Mijozning Telegram ID sini yozing:", reply_markup=CANCEL_KB)
+    await msg.answer("🚫 Bloklash yoki ochish uchun Mijozning Telegram ID sini yozing:\n<i>(ID ni '👥 Mijozlar' bo'limidan nusxalashingiz mumkin)</i>", reply_markup=CANCEL_KB)
     await state.set_state(AdminSt.ban_user)
 
 @router.message(AdminSt.ban_user)
@@ -912,15 +977,70 @@ async def p_photo(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer("✅ Mahsulot qo'shildi!", reply_markup=admin_kb())
 
+# ✨ MAHSULOTNI TAHRIRLASH QISMI ✨
 @router.callback_query(F.data.startswith("admp_"))
 async def adm_p_det(call: CallbackQuery):
     pid = int(call.data[5:])
     p = await q1("SELECT * FROM products WHERE id=?", (pid,))
     if not p: return await call.answer("Topilmadi", show_alert=True)
     st = "✅ Faol" if p['is_active'] else "❌ O'chirilgan"
-    await call.message.edit_text(f"📦 {p['name']}\nNarx: {p['price']}\nOmbor: {p['stock']}\nHolat: {st}", reply_markup=ik(
-        [("🟢/🔴 Yoqish/O'chirish", f"ptog_{pid}"), ("🗑 O'chirish", f"pdel_{pid}")]))
+    
+    await call.message.edit_text(f"📦 <b>{p['name']}</b>\nNarx: {fmt(p['price'])} so'm\nOmbor: {p['stock']} ta\nHolat: {st}", reply_markup=ik(
+        [("✏️ Tahrirlash", f"pmenu_{pid}")],
+        [("🟢/🔴 Yoqish/O'chirish", f"ptog_{pid}"), ("🗑 O'chirish", f"pdel_{pid}")]
+    ))
     await call.answer()
+
+@router.callback_query(F.data.startswith("pmenu_"))
+async def pedit_menu(call: CallbackQuery):
+    pid = int(call.data[6:])
+    await call.message.edit_text("Nimani o'zgartiramiz?", reply_markup=ik(
+        [("✏️ Nomi", f"pedit_name_{pid}"), ("📄 Tavsifi", f"pedit_desc_{pid}")],
+        [("💰 Narxi", f"pedit_price_{pid}"), ("📦 Ombor", f"pedit_stock_{pid}")],
+        [("🖼 Rasm", f"pedit_photo_{pid}"), ("🔙 Orqaga", f"admp_{pid}")]
+    ))
+    await call.answer()
+
+@router.callback_query(F.data.startswith("pedit_"))
+async def pedit_field(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split("_")
+    field = parts[1]
+    pid = int(parts[2])
+    await state.update_data(edit_pid=pid, edit_field=field)
+    
+    prompts = {
+        "name": "✏️ Yangi nomni kiriting:",
+        "desc": "📄 Yangi tavsifni kiriting:",
+        "price": "💰 Yangi narxni kiriting (Faqat raqam):",
+        "stock": "📦 Ombordagi yangi qoldiqni kiriting (Faqat raqam):",
+        "photo": "🖼 Yangi rasmni yuboring:"
+    }
+    await call.message.answer(prompts[field], reply_markup=CANCEL_KB)
+    await state.set_state(AdminSt.prod_edit_val)
+    await call.answer()
+
+@router.message(AdminSt.prod_edit_val)
+async def save_pedit(msg: Message, state: FSMContext):
+    d = await state.get_data()
+    pid = d.get("edit_pid"); field = d.get("edit_field")
+    
+    if field in ["price", "stock"]:
+        if not msg.text or not msg.text.isdigit(): 
+            return await msg.answer("⚠️ Iltimos, faqat raqam kiriting!\n(Yoki ❌ Bekor qilishni bosing)")
+        val = int(msg.text)
+    elif field == "photo":
+        if not msg.photo: 
+            return await msg.answer("⚠️ Iltimos, rasm yuboring!\n(Yoki ❌ Bekor qilishni bosing)")
+        val = msg.photo[-1].file_id
+    else:
+        val = msg.text.strip() if msg.text else ""
+        
+    db_fields = {"name": "name", "desc": "description", "price": "price", "stock": "stock", "photo": "photo_id"}
+    col = db_fields[field]
+    
+    await exe(f"UPDATE products SET {col}=? WHERE id=?", (val, pid))
+    await state.clear()
+    await msg.answer("✅ Mahsulot muvaffaqiyatli tahrirlandi!", reply_markup=admin_kb())
 
 @router.callback_query(F.data.startswith("ptog_"))
 async def ptog(call: CallbackQuery):
@@ -968,6 +1088,7 @@ async def send_bcast(msg: Message, state: FSMContext):
 @router.callback_query(F.data == "noop")
 async def noop_cb(call: CallbackQuery): await call.answer()
 
+# 👇 DARVOZABON ENG OXIRIDA (MUHIM!) 👇
 @router.message(StateFilter("*"))
 async def catch_all(msg: Message, state: FSMContext):
     st = await state.get_state()
