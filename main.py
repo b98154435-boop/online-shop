@@ -150,8 +150,9 @@ def admin_kb():
         ["📂 Bo'limlar", "📦 Mahsulotlar"], 
         ["💳 To'lov usullari", "👥 Xodimlar"], 
         ["👥 Mijozlar", "🚫 Ban/Unban"], 
-        ["📊 Statistika", "⚙️ Sozlamalar"], 
-        ["📨 Broadcast", "🔙 Asosiy menyu"]
+        ["📊 Statistika", "🧹 Tozalash"], 
+        ["⚙️ Sozlamalar", "📨 Broadcast"],
+        ["🔙 Asosiy menyu"]
     )
 
 def courier_kb():
@@ -570,7 +571,7 @@ async def urev_skip(call: CallbackQuery, state: FSMContext):
         except: pass
 
 # ──────────────────────────────────────────
-# 🛠 6. KURYER VA ADMIN CRUD
+# 🚚 6. KURYER PROCESS HANDLERLARI
 # ──────────────────────────────────────────
 @router.message(F.text == "🚚 Kuryer Panel")
 async def cmd_courier(msg: Message):
@@ -596,111 +597,99 @@ async def admin_set_fee(call: CallbackQuery, state: FSMContext):
     f_per = float((await q1("SELECT value FROM settings WHERE key='fee_per_km'"))['value'])
     avt = int(max(1, math.ceil(km)) * f_per) if km > 0 else 15000
     await state.update_data(fee_oid=oid)
-    await call.message.answer("🚚 <b>Yo'lkira qancha? Nima qilamiz?</b>", reply_markup=ik(
-        [(f"🚀 Kuryerlarga tashlash ({fmt(avt)} so'm)", f"doconf_{oid}_{avt}")],
-        [(f"🙋‍♂️ O'zim olib boraman ({fmt(avt)} so'm)", f"admself_{oid}_{avt}")],
-        [("✏️ Boshqa narx yozish", "manual_fee")]))
-    await call.answer()
-
-@router.callback_query(F.data == "manual_fee")
-async def admin_manual_fee(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("💰 Yo'lkira narxini raqamda yozing:", reply_markup=CANCEL_KB)
+    await call.message.answer(
+        f"💰 <b>Buyurtma #{oid} uchun yo'lkira</b>\n\n"
+        f"📏 Masofa: {km:.1f} km\n"
+        f"🤖 Tizim hisoblagan narx: <b>{fmt(avt)} so'm</b>\n\n"
+        f"Mijozga yuboriladigan yakuniy yo'lkira narxini raqamlarda kiriting:", 
+        reply_markup=CANCEL_KB
+    )
     await state.set_state(AdminSt.set_fee)
     await call.answer()
 
 @router.message(AdminSt.set_fee)
-async def admin_manual_fee_input(msg: Message, state: FSMContext):
-    if not msg.text.isdigit(): return await msg.answer("Faqat raqam!")
-    d = await state.get_data(); oid = d['fee_oid']; fee = int(msg.text)
-    await msg.answer("Bu narx bilan nima qilamiz?", reply_markup=ik(
-        [("🚀 Kuryerlarga tashlash", f"doconf_{oid}_{fee}")],
-        [("🙋‍♂️ O'zim olib boraman", f"admself_{oid}_{fee}")]))
-    await state.clear()
-
-@router.callback_query(F.data.startswith("doconf_"))
-async def admin_auto_conf(call: CallbackQuery):
-    parts = call.data.split("_"); oid = int(parts[1]); fee = int(parts[2])
+async def admin_save_fee(msg: Message, state: FSMContext):
+    if not msg.text.isdigit():
+        return await msg.answer("❌ Iltimos, faqat raqam kiriting (Masalan: 15000):")
+    
+    fee = int(msg.text)
+    d = await state.get_data()
+    oid = d['fee_oid']
+    
     await exe("UPDATE orders SET delivery_fee=?, status='pending_courier' WHERE id=?", (fee, oid))
     o = await q1("SELECT * FROM orders WHERE id=?", (oid,))
-    try: await bot.send_message(o['user_id'], f"✅ Tasdiqlandi! Yo'lkira: <b>{fmt(fee)} so'm</b>.\nKuryer qidirilmoqda 🔎")
-    except: pass
-    cs = await qall("SELECT tg_id FROM admins WHERE role='courier' AND is_active=1")
-    txt = f"🔥 <b>YANGI BUYURTMA #{oid}</b>\n📍 Mo'ljal: {o['landmark']}\n📏 Masofa: {o['distance']:.1f} km\n💰 Yo'lkira: <b>{fmt(fee)} so'm</b>\nKim birinchi olsa o'shanga yoziladi!"
-    for c in cs:
-        try:
-            await bot.send_location(c['tg_id'], o['lat'], o['lon'])
-            await bot.send_message(c['tg_id'], txt, reply_markup=ik([("🙋 Men olaman", f"cgrab_{oid}")]))
-        except: pass
-    try: await call.message.delete()
-    except: pass
-    await call.answer("Yuborildi", show_alert=True)
-
-@router.callback_query(F.data.startswith("admself_"))
-async def admin_self_deliver(call: CallbackQuery):
-    parts = call.data.split("_"); oid = int(parts[1]); fee = int(parts[2])
-    await exe("UPDATE orders SET delivery_fee=?, status='on_way', courier_id=? WHERE id=?", (fee, call.from_user.id, oid))
-    o = await q1("SELECT user_id FROM orders WHERE id=?", (oid,))
-    try: await bot.send_message(o['user_id'], f"✅ Tasdiqlandi! Yo'lkira: <b>{fmt(fee)} so'm</b>.\nDo'kon xodimining o'zi yo'lga chiqdi 🚚")
-    except: pass
-    try: await call.message.delete()
-    except: pass
-    await call.message.answer(f"✅ <b>Buyurtma #{oid} sizning o'zingizga yozildi!</b>\nManzilga yetgach bosing:", reply_markup=ik([("✅ Mijozga topshirdim", f"cdeliv_{oid}")]))
-    await call.answer()
+    await state.clear()
+    await msg.answer(f"✅ Buyurtma #{oid} uchun yo'lkira {fmt(fee)} so'm qilib belgilandi!", reply_markup=admin_kb())
+    
+    try:
+        jami = o['total_amount'] + fee
+        await bot.send_message(
+            o['user_id'], 
+            f"💰 <b>Buyurtmangiz #{oid} tasdiqlandi!</b>\n\n"
+            f"🛍 Mahsulotlar: {fmt(o['total_amount'])} so'm\n"
+            f"🚚 Yo'lkira haqi: {fmt(fee)} so'm\n"
+            f"💵 Jami to'lov: <b>{fmt(jami)} so'm</b>\n\n"
+            f"🔎 Hozirda kuryer tayyinlanmoqda, iltimos kuting..."
+        )
+        
+        couriers = await qall("SELECT tg_id FROM admins WHERE role='courier' AND is_active=1")
+        c_txt = f"🚚 <b>Yangi buyurtma kuryer kutmoqda! #{oid}</b>\n🏠 Mo'ljal: {o['landmark']}\n💰 Yo'lkira: {fmt(fee)} so'm"
+        for c in couriers:
+            try: await bot.send_message(c['tg_id'], c_txt, reply_markup=ik([("🚖 Buyurtmani olish", f"caccept_{oid}")]))
+            except: pass
+    except Exception: pass
 
 @router.callback_query(F.data.startswith("acancel_"))
 async def admin_cancel_order(call: CallbackQuery):
     oid = int(call.data[8:])
-    await exe("UPDATE orders SET status='cancelled', cancel_reason='Admin bekor qildi' WHERE id=?", (oid,))
+    await exe("UPDATE orders SET status='cancelled', cancel_reason='Admin rad etdi' WHERE id=?", (oid,))
     await return_stock(oid)
-    await call.message.edit_text(f"❌ #{oid} Bekor qilindi.")
     o = await q1("SELECT user_id FROM orders WHERE id=?", (oid,))
-    try: await bot.send_message(o['user_id'], f"❌ Buyurtmangiz (#{oid}) bekor qilindi.")
+    await call.message.edit_text(f"❌ Buyurtma #{oid} rad etildi va bekor qilindi.")
+    try: await bot.send_message(o['user_id'], f"❌ Kechirasiz, sizning #{oid} buyurtmangiz do'kon ma'muriyati tomonidan rad etildi.")
     except: pass
     await call.answer()
 
-@router.callback_query(F.data.startswith("cgrab_"))
-async def courier_grab(call: CallbackQuery):
-    if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='courier'", (call.from_user.id,)): return
-    oid = int(call.data[6:])
+@router.callback_query(F.data.startswith("caccept_"))
+async def courier_accept(call: CallbackQuery):
+    oid = int(call.data[8:])
     o = await q1("SELECT status FROM orders WHERE id=?", (oid,))
-    if o['status'] != 'pending_courier': return await call.answer("❌ Kechikdingiz, boshqa kuryer olib bo'ldi!", show_alert=True)
-    await exe("UPDATE orders SET status='assigned', courier_id=? WHERE id=?", (call.from_user.id, oid))
-    try: await call.message.delete()
-    except: pass
-    await call.message.answer(f"✅ <b>Buyurtma #{oid} sizga yozildi!</b>", reply_markup=ik([("🛍 Do'kondan oldim", f"cpickup_{oid}")]))
+    if o['status'] != 'pending_courier':
+        return await call.answer("❌ Bu buyurtmani allaqachon boshqa kuryer olgan!", show_alert=True)
+    
+    await exe("UPDATE orders SET courier_id=?, status='assigned' WHERE id=?", (call.from_user.id, oid))
+    await call.message.edit_text(f"✅ Buyurtma #{oid} sizga biriktirildi. Do'kondan mahsulotni olib yo'lga chiqing.")
     await call.answer()
 
 @router.callback_query(F.data.startswith("cpickup_"))
 async def courier_pickup(call: CallbackQuery):
     oid = int(call.data[8:])
     await exe("UPDATE orders SET status='on_way' WHERE id=?", (oid,))
+    await call.message.edit_text(f"🚚 Buyurtma #{oid} holati 'Yo'lda' qilib o'zgartirildi.")
     o = await q1("SELECT user_id FROM orders WHERE id=?", (oid,))
-    try: await bot.send_message(o['user_id'], f"🚚 <b>Kuryer yo'lga chiqdi!</b>")
+    try: await bot.send_message(o['user_id'], f"🚚 Buyurtmangiz #{oid} do'kondan olindi va kuryerimiz yo'lga chiqdi!")
     except: pass
-    await call.message.edit_text(f"🚚 <b>#{oid} yo'lda!</b>", reply_markup=ik([("✅ Mijozga topshirdim", f"cdeliv_{oid}")]))
     await call.answer()
 
 @router.callback_query(F.data.startswith("cdeliv_"))
 async def courier_deliver(call: CallbackQuery):
-    oid = int(call.data[7:])
+    oid = int(call.data[8:])
     await exe("UPDATE orders SET status='delivered' WHERE id=?", (oid,))
+    await call.message.edit_text(f"🎉 Buyurtma #{oid} muvaffaqiyatli topshirildi!")
     o = await q1("SELECT user_id FROM orders WHERE id=?", (oid,))
-    user_kb = ik([("✅ Ha, oldim (Baho berish)", f"ureview_{oid}")], [("❌ Yo'q, menga kelmadi", f"not_recv_{oid}")])
-    try: await bot.send_message(o['user_id'], f"🎉 <b>Hurmatli mijoz!</b>\nBuyurtma yetkazildi. Qo'lingizga oldingizmi?", reply_markup=user_kb)
+    try:
+        await bot.send_message(
+            o['user_id'], 
+            f"🎉 Buyurtmangiz #{oid} muvaffaqiyatli yetkazildi!\n\n"
+            f"Iltimos, xizmat ko'rsatish sifatini baholash uchun '📦 Buyurtmalarim' menyusiga kiring.",
+            reply_markup=await main_kb(o['user_id'])
+        )
     except: pass
-    await call.message.edit_text(f"✅ #{oid} yetkazildi deb belgilandi.")
     await call.answer()
 
-@router.callback_query(F.data.startswith("not_recv_"))
-async def not_received(call: CallbackQuery):
-    oid = int(call.data[9:])
-    await call.message.edit_text("🚨 Adminlarga xabar yuborildi.")
-    adms = await qall("SELECT tg_id FROM admins WHERE role='admin' AND is_active=1")
-    for a in adms:
-        try: await bot.send_message(a['tg_id'], f"🚨 <b>DIQQAT! JIDDIY MUAMMO:</b>\n#{oid} ni mijoz 'olmadim' dedi!")
-        except: pass
-    await call.answer()
-
+# ──────────────────────────────────────────
+# ⚙️ 7. ADMIN PANEL ASOSIY CHIZMALARI
+# ──────────────────────────────────────────
 @router.message(F.text == "⚙️ Admin Panel")
 async def cmd_admin(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -738,6 +727,9 @@ async def set_shop_loc_save(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer("✅ Do'kon lokatsiyasi muvaffaqiyatli yangilandi!", reply_markup=admin_kb())
 
+# ──────────────────────────────────────────
+# 👥 8. XODIM VA MIJOZLAR MANAGEMENT
+# ──────────────────────────────────────────
 @router.message(F.text == "👥 Xodimlar")
 async def admin_staff(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -780,10 +772,8 @@ async def save_staff(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer(f"✅ {role_uz} qo'shildi! Unga ismini kiritishi uchun xabar yubordim.", reply_markup=admin_kb())
     
-    try:
-        await bot.send_message(tg_id, f"🎉 <b>Tabriklaymiz!</b> Siz do'konga <b>{role_uz}</b> etib tayinlandingiz!\n\n👇 Iltimos, ma'muriyat sizni tanib olishi uchun pastdagi tugmani bosib o'z ismingizni kiriting:", reply_markup=ik([("✍️ Ismni kiritish", "force_name_set")]))
-    except Exception:
-        pass
+    try: await bot.send_message(tg_id, f"🎉 <b>Tabriklaymiz!</b> Siz do'konga <b>{role_uz}</b> etib tayinlandingiz!\n\n👇 Iltimos, ma'muriyat sizni tanib olishi uchun pastdagi tugmani bosib o'z ismingizni kiriting:", reply_markup=ik([("✍️ Ismni kiritish", "force_name_set")]))
+    except: pass
 
 @router.callback_query(F.data == "force_name_set")
 async def ask_staff_name(call: CallbackQuery, state: FSMContext):
@@ -801,7 +791,6 @@ async def admin_users_list(msg: Message):
     for u in users:
         status = "🚫 BAN" if u['is_blocked'] else "✅ Faol"
         txt += f"👤 {u['name']} | 📱 {u['phone']}\n🆔 <code>{u['tg_id']}</code> | {status}\n\n"
-    
     await msg.answer(txt)
 
 @router.message(F.text == "🚫 Ban/Unban")
@@ -821,6 +810,9 @@ async def save_ban(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer(f"✅ Mijoz {'Blokdan chiqarildi' if new_st == 0 else 'Bloklandi'}!", reply_markup=admin_kb())
 
+# ──────────────────────────────────────────
+# 💳 9. TO'LOV USULLARI MANAGEMENT
+# ──────────────────────────────────────────
 @router.message(F.text == "💳 To'lov usullari")
 async def admin_payments(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -869,6 +861,9 @@ async def save_pay(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer("✅ Saqlandi!", reply_markup=admin_kb())
 
+# ──────────────────────────────────────────
+# 📂 10. BO'LIMLAR MANAGEMENT
+# ──────────────────────────────────────────
 @router.message(F.text == "📂 Bo'limlar")
 async def adm_cats(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -919,6 +914,9 @@ async def admin_cat_edit_name_save(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer(f"✅ O'zgartirildi!", reply_markup=admin_kb())
 
+# ──────────────────────────────────────────
+# 📦 11. MAHSULOTLAR CRUD & EDIT MENU
+# ──────────────────────────────────────────
 @router.message(F.text == "📦 Mahsulotlar")
 async def adm_prods(msg: Message):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -977,14 +975,13 @@ async def p_photo(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer("✅ Mahsulot qo'shildi!", reply_markup=admin_kb())
 
-# ✨ MAHSULOTNI TAHRIRLASH QISMI ✨
+@router.callback_query(F.data.startswith("admp_{")) # Fix formatting issue
 @router.callback_query(F.data.startswith("admp_"))
 async def adm_p_det(call: CallbackQuery):
     pid = int(call.data[5:])
     p = await q1("SELECT * FROM products WHERE id=?", (pid,))
     if not p: return await call.answer("Topilmadi", show_alert=True)
     st = "✅ Faol" if p['is_active'] else "❌ O'chirilgan"
-    
     await call.message.edit_text(f"📦 <b>{p['name']}</b>\nNarx: {fmt(p['price'])} so'm\nOmbor: {p['stock']} ta\nHolat: {st}", reply_markup=ik(
         [("✏️ Tahrirlash", f"pmenu_{pid}")],
         [("🟢/🔴 Yoqish/O'chirish", f"ptog_{pid}"), ("🗑 O'chirish", f"pdel_{pid}")]
@@ -1057,14 +1054,118 @@ async def pdel(call: CallbackQuery):
     await call.message.edit_text("✅ O'chirildi.")
     await call.answer()
 
+# ──────────────────────────────────────────
+# 📊 12. TAHLILIY STATISTIKA DASHBOARD
+# ──────────────────────────────────────────
 @router.message(F.text == "📊 Statistika")
-async def adm_stats(msg: Message):
-    if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
-    u_c = (await q1("SELECT COUNT(*) as n FROM users"))['n']
-    o_c = (await q1("SELECT COUNT(*) as n FROM orders WHERE status='delivered'"))['n']
-    o_sum = (await q1("SELECT SUM(total_amount) as s FROM orders WHERE status='delivered'"))['s'] or 0
-    await msg.answer(f"📊 <b>Statistika</b>\n\n👥 Mijozlar: {u_c}\n📦 Yetkazilgan: {o_c}\n💰 Umumiy savdo: {fmt(o_sum)} so'm")
+async def admin_statistics(msg: Message):
+    if not await check_admin(msg.from_user.id): return
 
+    daily = await q1("""
+        SELECT COUNT(id) as c, COALESCE(SUM(total_amount), 0) as s 
+        FROM orders 
+        WHERE status='delivered' AND DATE(created_at) = CURRENT_DATE
+    """)
+    monthly = await q1("""
+        SELECT COUNT(id) as c, COALESCE(SUM(total_amount), 0) as s 
+        FROM orders 
+        WHERE status='delivered' AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', CURRENT_DATE)
+    """)
+    yearly = await q1("""
+        SELECT COUNT(id) as c, COALESCE(SUM(total_amount), 0) as s 
+        FROM orders 
+        WHERE status='delivered' AND DATE_TRUNC('year', created_at) = DATE_TRUNC('year', CURRENT_DATE)
+    """)
+    
+    users_c = await q1("SELECT COUNT(id) as c FROM users")
+    prods_c = await q1("SELECT COUNT(id) as c FROM products")
+
+    text = (
+        "📊 <b>Do'kon Statistikasi</b>\n\n"
+        f"📅 <b>Bugun:</b>\nBuyurtmalar: {daily['c']} ta\nDaromad: {fmt(daily['s'])} so'm\n\n"
+        f"📆 <b>Bu oy:</b>\nBuyurtmalar: {monthly['c']} ta\nDaromad: {fmt(monthly['s'])} so'm\n\n"
+        f"🗓 <b>Bu yil:</b>\nBuyurtmalar: {yearly['c']} ta\nDaromad: {fmt(yearly['s'])} so'm\n\n"
+        "─────────────────\n"
+        f"👥 Jami ro'yxatdan o'tgan mijozlar: <b>{users_c['c']} ta</b>\n"
+        f"📦 Bazadagi mahsulotlar: <b>{prods_c['c']} ta</b>"
+    )
+    await msg.answer(text)
+
+# ──────────────────────────────────────────
+# 🧹 13. TOZALASH BO'LIMI (CLEAR DATA)
+# ──────────────────────────────────────────
+@router.message(F.text == "🧹 Tozalash")
+async def admin_clear_menu(msg: Message):
+    if not await check_admin(msg.from_user.id): return
+    
+    kb = ik(
+        [("🗑 Bo'limlarni tozalash", "clear_categories")],
+        [("🗑 Mahsulotlarni tozalash", "clear_products")],
+        [("🗑 Xodimlarni tozalash", "clear_admins")],
+        [("🗑 Mijozlarni tozalash", "clear_users")],
+        [("🗑 Buyurtmalarni tozalash", "clear_orders")]
+    )
+    await msg.answer(
+        "🧹 <b>Qaysi bo'limni tozalamoqchisiz?</b>\n\n"
+        "⚠️ <i>Diqqat: O'chirilgan ma'lumotlarni ortga qaytarib bo'lmaydi!</i>", 
+        reply_markup=kb
+    )
+
+@router.callback_query(F.data.startswith("clear_"))
+async def clear_ask_confirm(call: CallbackQuery):
+    target = call.data.split("_")[1]
+    names = {
+        "categories": "Bo'limlar",
+        "products": "Mahsulotlar",
+        "admins": "Xodimlar (Kuryer/Admin)",
+        "users": "Mijozlar",
+        "orders": "Buyurtmalar"
+    }
+    
+    kb = ik(
+        [("✅ Ha, o'chirish", f"doclear_{target}")],
+        [("❌ Bekor qilish", "cancel_clear")]
+    )
+    await call.message.edit_text(
+        f"⚠️ Siz rostdan ham <b>{names.get(target)}</b> dagi barcha ma'lumotlarni o'chirib yubormoqchimisiz?", 
+        reply_markup=kb
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "cancel_clear")
+async def cancel_clear_action(call: CallbackQuery):
+    await call.message.edit_text("✅ O'chirish amali bekor qilindi.")
+    await call.answer()
+
+@router.callback_query(F.data.startswith("doclear_"))
+async def execute_clear(call: CallbackQuery):
+    target = call.data.split("_")[1]
+    
+    if target == "categories":
+        await exe("TRUNCATE TABLE categories RESTART IDENTITY CASCADE")
+        msg = "✅ Barcha bo'limlar tozalandi."
+    elif target == "products":
+        await exe("TRUNCATE TABLE products RESTART IDENTITY CASCADE")
+        msg = "✅ Barcha mahsulotlar tozalandi."
+    elif target == "admins":
+        await exe("DELETE FROM admins WHERE role != 'admin'")
+        msg = "✅ Kuryer va yordamchi xodimlar tozalandi (Asosiy admin saqlab qolindi)."
+    elif target == "users":
+        await exe("TRUNCATE TABLE users RESTART IDENTITY CASCADE")
+        msg = "✅ Barcha mijozlar tozalandi."
+    elif target == "orders":
+        await exe("TRUNCATE TABLE orders RESTART IDENTITY CASCADE")
+        await exe("TRUNCATE TABLE order_items RESTART IDENTITY CASCADE")
+        msg = "✅ Barcha buyurtmalar tarixi tozalandi."
+    else:
+        msg = "❌ Noma'lum xatolik."
+    
+    await call.message.edit_text(msg)
+    await call.answer()
+
+# ──────────────────────────────────────────
+# 📨 14. BROADCAST (REKLAMA)
+# ──────────────────────────────────────────
 @router.message(F.text == "📨 Broadcast")
 async def adm_bcast(msg: Message, state: FSMContext):
     if not await q1("SELECT 1 FROM admins WHERE tg_id=? AND role='admin'", (msg.from_user.id,)): return
@@ -1088,7 +1189,9 @@ async def send_bcast(msg: Message, state: FSMContext):
 @router.callback_query(F.data == "noop")
 async def noop_cb(call: CallbackQuery): await call.answer()
 
-# 👇 DARVOZABON ENG OXIRIDA (MUHIM!) 👇
+# ──────────────────────────────────────────
+# 👇 15. DARVOZABON (CATCH-ALL) - ENG PASDDA BO'LISHI SHART!
+# ──────────────────────────────────────────
 @router.message(StateFilter("*"))
 async def catch_all(msg: Message, state: FSMContext):
     st = await state.get_state()
@@ -1099,7 +1202,7 @@ async def catch_all(msg: Message, state: FSMContext):
         await msg.answer("⚠️ <b>Iltimos, kutilayotgan ma'lumotni to'g'ri kiriting!</b>\n<i>(Yoki jarayonni bekor qilish uchun pastdagi <b>❌ Bekor qilish</b> tugmasini bosing).</i>")
 
 # ──────────────────────────────────────────
-# 🚀 ENGINE RUNNER (Dvigatel)
+# 🚀 BOTNI ISHGA TUSHIRISH (MAIN ENGINE)
 # ──────────────────────────────────────────
 async def main():
     await init_db()
